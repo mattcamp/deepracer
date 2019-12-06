@@ -1,6 +1,11 @@
 <?xml version="1.0"?>
 <sdf version="1.4">
 <world name="reInvent2019_track">
+<gui>
+<camera name="default_camera">
+<pose>4.512729 2.904558 9.642279 0 1.549797 1.564210</pose>
+</camera>
+</gui>
 <scene>
 <ambient>0.5 0.5 0.5 1.0</ambient>
 <shadows>0</shadows>
