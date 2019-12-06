@@ -3,7 +3,7 @@
 <world name="reInvent2019_track">
 <gui>
 <camera name="default_camera">
-<pose>4.512729 2.904558 9.642279 0 1.549797 1.564210</pose>
+<pose>5.354623 0.258375 8.795622 -0.000000 1.569796 1.589495</pose>
 </camera>
 </gui>
 <scene>
