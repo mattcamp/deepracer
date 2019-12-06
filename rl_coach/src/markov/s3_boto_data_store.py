@@ -7,9 +7,14 @@ import logging
 import traceback
 
 import boto3
+import logging
+# boto3.set_stream_logger(name='botocore')
+# logging.getLogger('botocore').setLevel(logging.INFO)
+from boto3.s3.transfer import TransferConfig
+from botocore.client import Config
+
 from google.protobuf import text_format
 from tensorflow.python.training.checkpoint_state_pb2 import CheckpointState
-from botocore.client import Config
 
 from rl_coach.data_stores.data_store import DataStore, DataStoreParameters, SyncFiles
 from markov import utils
@@ -66,13 +71,16 @@ class S3BotoDataStore(DataStore):
                                  Key=self._get_s3_key(SyncFiles.FINISHED.value))
 
     def save_to_store(self):
+        print("in s3_boto_data_store.py: save_to_store(self)")
         try:
             s3_client = self._get_client()
 
             # Delete any existing lock file
+            # print("Deleting lock file")
             s3_client.delete_object(Bucket=self.params.bucket, Key=self._get_s3_key(self.params.lock_file))
 
             # We take a lock by writing a lock file to the same location in S3
+            # print("Writing new lock file")
             s3_client.upload_fileobj(Fileobj=io.BytesIO(b''),
                                      Bucket=self.params.bucket,
                                      Key=self._get_s3_key(self.params.lock_file))
@@ -81,6 +89,8 @@ class S3BotoDataStore(DataStore):
             checkpoint = self._get_current_checkpoint()
             if checkpoint:
                 checkpoint_number = self._get_checkpoint_number(checkpoint)
+
+            # s3config = TransferConfig(use_threads=True)
 
             checkpoint_file = None
             for root, dirs, files in os.walk(self.params.checkpoint_dir):
@@ -97,29 +107,51 @@ class S3BotoDataStore(DataStore):
                     # Upload all the other files from the checkpoint directory
                     abs_name = os.path.abspath(os.path.join(root, filename))
                     rel_name = os.path.relpath(abs_name, self.params.checkpoint_dir)
-                    s3_client.upload_file(Filename=abs_name,
-                                          Bucket=self.params.bucket,
-                                          Key=self._get_s3_key(rel_name))
+                    file_size = os.path.getsize(abs_name)
+                    
+                    upload_success = False
+                    while not upload_success:
+                        print("Uploading checkpoint file %s (%s bytes)... " % (filename,str(file_size)), end='')
+                        start_time = time.time()
+                        try:
+                            s3_client.upload_file(Filename=abs_name,
+                                                Bucket=self.params.bucket,
+                                                Key=self._get_s3_key(rel_name))
+                            
+                            stop_time = time.time()
+                            
+                            print("done in %f seconds" % (stop_time - start_time))
+                            upload_success = True
+                        except Exception as e:
+                            print("Upload failed: %s" % str(e))
+                            time.sleep(5)
+                            pass
                     num_files_uploaded += 1
             logger.info("Uploaded {} files for checkpoint {}".format(num_files_uploaded, checkpoint_number))
 
             # After all the checkpoint files have been uploaded, we upload the version file.
             abs_name = os.path.abspath(os.path.join(checkpoint_file[0], checkpoint_file[1]))
             rel_name = os.path.relpath(abs_name, self.params.checkpoint_dir)
+            print("Uploading version file %s... " % abs_name, end='')
             s3_client.upload_file(Filename=abs_name,
                                   Bucket=self.params.bucket,
                                   Key=self._get_s3_key(rel_name))
+            print("done")
 
             # Release the lock by deleting the lock file from S3
+            # print("Releasing lock")
             s3_client.delete_object(Bucket=self.params.bucket, Key=self._get_s3_key(self.params.lock_file))
 
             # Upload the frozen graph which is used for deployment
             if self.graph_manager:
+                # print("Starting frozen graph write...", end='')
                 utils.write_frozen_graph(self.graph_manager)
+                # print("done")
                 # upload the model_<ID>.pb to S3. NOTE: there's no cleanup as we don't know the best checkpoint
                 iteration_id = self.graph_manager.level_managers[0].agents['agent'].training_iteration
                 frozen_graph_fpath = utils.SM_MODEL_OUTPUT_DIR + "/model.pb"
                 frozen_graph_s3_name = "model_%s.pb" % iteration_id
+                # print("Uploading frozen graph...")
                 s3_client.upload_file(Filename=frozen_graph_fpath,
                                   Bucket=self.params.bucket,
                                   Key=self._get_s3_key(frozen_graph_s3_name))
